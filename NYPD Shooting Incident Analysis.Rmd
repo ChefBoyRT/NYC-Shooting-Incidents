@@ -1,0 +1,172 @@
+---
+title: "NYPD Shooting Incident Data (Historic)"
+author: "T. Stein"
+date: "7/13/2021"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=10) 
+```
+
+```{r libraries, echo=FALSE, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(readr)
+```
+
+## Step 1 - Import the data
+> The first step is to set the url for the NYPD Shooting Incident Data on Data.gov.
+```{r url}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+```
+
+> The next step is to import the data.
+```{r data}
+raw_data <- read_csv(url_in)
+```
+
+## Step 2 - Transform and Mutate the Data
+> Next we want to select only the columns we will be using for the analysis.
+```{r select_data}
+filtered_data <- raw_data %>%
+  select(-c(INCIDENT_KEY,X_COORD_CD,Y_COORD_CD,Latitude,Longitude,Lon_Lat,LOCATION_DESC))
+```
+
+> Next, we want the date column to be of type date.
+```{r mutate_date}
+filtered_data <- filtered_data %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+```  
+
+> Then we will turn categorical variables into factors.
+```{r factor_data}
+filtered_data <- filtered_data %>%
+  mutate(PERP_SEX = as_factor(PERP_SEX)) %>%
+  mutate(PERP_RACE = as_factor(PERP_RACE)) %>%
+  mutate(PERP_AGE_GROUP = as_factor(PERP_AGE_GROUP)) %>%
+  mutate(VIC_AGE_GROUP = as_factor(VIC_AGE_GROUP)) %>%
+  mutate(VIC_SEX = as_factor(VIC_SEX)) %>%
+  mutate(VIC_RACE = as_factor(VIC_RACE))
+```
+
+> After the transformations and mutations have been made, we want to see
+a summary of the data.
+```{r data_summary}
+summary(filtered_data)
+```
+
+> Now let's check to see how many ```NA``` values exist in each column.
+```{r check_na}
+sapply(filtered_data, function(x) sum(is.na(x)))
+```
+
+> Then we'll drop the rows with ```NA``` values.
+```{r drop_na}
+filtered_data <- filtered_data %>%
+  drop_na()
+```
+
+> Finally we'll check again to see if the ```NA``` values have been dropped.
+```{r check_na_again}
+sapply(filtered_data, function(x) sum(is.na(x)))
+```
+
+> Let's add some extra information about the Boroughs that we'll use in the
+analysis.
+```{r extra_info}
+pop <- c(1438000, 2601000, 1632000, 2299000, 474101)
+boro <- c("BRONX", "BROOKLYN", "MANHATTAN", "QUEENS", "STATEN ISLAND")
+sqmiles <- c(42.47,69.5,22.82,108.1,58.69)
+population <- tibble(population = pop, boro = boro, square_miles = sqmiles)
+```
+
+## Step 3 - Visualize the Data
+> First, let's plot the number of deaths by police shootings to see if they are 
+increasing or decreasing over time by ```BORO```.
+```{r plot_deaths_over_time}
+filtered_data %>%
+  group_by(BORO, YEAR = year(OCCUR_DATE)) %>%
+  summarize(DEATHS = sum(STATISTICAL_MURDER_FLAG)) %>%
+  ggplot(aes(x=YEAR, y=DEATHS)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~BORO) +
+  theme_minimal() +
+  xlab("Year") +
+  ylab("Deaths")
+```
+*It appears that most boroughs have experienced a decrease in deaths by police 
+involved shootings over time. However, in the past year it seems as though all 
+of the boroughs have experienced a slight uptick in activity. Brooklyn has 
+experienced the most amount of shootings while Staten Island has experienced the 
+least amount of shootings.*
+
+>Now we'll plot the number of deaths by ```BORO``` to see which ```BORO``` has the most deaths.
+```{r plot_deaths_by_boro}
+filtered_data %>%
+  group_by(BORO) %>%
+  summarize(deaths = sum(STATISTICAL_MURDER_FLAG)) %>%
+  inner_join(population, by = c("BORO" = "boro")) %>%
+  select(boro = BORO, deaths, population) %>%
+  ggplot(aes(x=reorder(boro, -deaths), y=deaths, fill=deaths/population*1000000)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  ggtitle("Number of Deaths by BORO") +
+  xlab("Borough") +
+  ylab("Murders per Million") +
+  guides(fill=guide_legend(title="Deaths Per Million"))
+```
+*Brooklyn has the most number of deaths by police shooting. Brooklyn also has the
+largest population of all the boroughs.*
+
+> We know that Brooklyn has the most deaths by police shooting of all the ```BOROs```. What time of day do most deaths occur?
+```{r deadliest_month}
+filtered_data %>%
+  group_by(hour = hour(OCCUR_TIME)) %>%
+  summarize(deaths = sum(STATISTICAL_MURDER_FLAG)) %>%
+  ggplot(aes(hour, deaths, fill=deaths)) +
+  geom_bar(stat = "identity", show.legend=FALSE) +
+  theme_minimal() +
+  ggtitle("Deaths by Hour of Day") +
+  xlab("Hour of Day") +
+  ylab("Deaths")
+```
+*In Brooklyn, most deaths by police shootings occur between 12:00am - 3:00am and 
+5:00pm - 10:00pm.*
+
+## Step 4 - Model the Data
+> Is ```BORO``` a good predictor for predicting if you will be killed in a police
+involved shooting?
+```{r model_boro}
+model <- lm(STATISTICAL_MURDER_FLAG ~ BORO, data=filtered_data)
+summary(model)
+```
+*At the 95% confidence interval, ```BORO``` is not statistically significant in 
+predicting if you will be killed if involved in a police shooting.*
+
+> Are ```VIC_AGE_GROUP``` and ```VIC_RACE``` good predictors for predicting if 
+you will be killed in a police involved shooting?
+```{r model_vic}
+model <- lm(STATISTICAL_MURDER_FLAG ~ VIC_AGE_GROUP + VIC_RACE, data=filtered_data)
+summary(model)
+```
+*At the 95% confidence interval, ```VIC_AGE_GROUP``` and ````VIC_RACE``` are statistically significant in predicting if you will be killed in a police involved shooting.*
+
+## Step 5 - Identify Bias
+> Because I did not pick the topic of NYPD Shooting Incidents, I did not introduce
+bias in the selection of the topic or data. I was raised in Manhattan so there 
+could be bias introduced in my assumptions of the most dangerous boroughs. The
+way I mitigated my bias was by not making assumptions and by coming to conclusions
+through proper and ethical data science practices.
+
+## Step 6 - Conclusion
+> From the NYPD Shooting Incident data we found some interesting findings. First,
+police involved shootings are decreasing over time for all ```BOROs```.Second,
+the most police shootings occur in Brooklyn. And the police shootings occur
+between 12:00am - 3:00am and 5:00pm - 10:00pm. We found that ```BORO``` alone
+is not a statistically significant predictor of death. However, ```VIC_AGE_GROUP``` and ```VIC_RACE``` are statistically significant in predicting if you will be killed in a police involved shooting. The next steps of the analysis would beto find additional information in an attempt to create a more accurate model to help predict the probability of dying in a police involved shooting.
